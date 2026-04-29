@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeadFlow AI — Intelligent Lead Generation</title>
+    <meta name="description" content="AI-powered lead generation agent that finds, scores, and writes personalized outreach emails.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="bg-effects">
+        <div class="bg-orb bg-orb--1"></div>
+        <div class="bg-orb bg-orb--2"></div>
+        <div class="bg-orb bg-orb--3"></div>
+        <div class="bg-grid"></div>
+    </div>
+
+    <div class="app">
+        <!-- Navbar -->
+        <nav class="navbar" id="navbar">
+            <div class="navbar__brand">
+                <div class="navbar__icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#nav-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <defs><linearGradient id="nav-grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs>
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <span class="navbar__title">LeadFlow<span class="navbar__title--accent">AI</span></span>
+            </div>
+            <div class="navbar__badge">Powered by Groq + LangGraph</div>
+        </nav>
+
+        <main>
+            <!-- Hero -->
+            <section class="hero" id="hero-section">
+                <div class="hero__content">
+                    <div class="hero__badge">
+                        <span class="hero__badge-dot"></span>
+                        AI-Powered Lead Generation
+                    </div>
+                    <h1 class="hero__title">Find, Score &amp; Reach<br><span class="gradient-text">Your Ideal Customers</span></h1>
+                    <p class="hero__subtitle">Enter your target industry and ideal customer profile. Our AI agent searches the web, enriches company data, scores leads, and writes personalized outreach emails — all in seconds.</p>
+                </div>
+            </section>
+
+            <!-- Config Form -->
+            <section class="config-section" id="config-section">
+                <div class="glass-card config-card">
+                    <div class="config-card__header">
+                        <h2>Configure Your Search</h2>
+                        <p>Define who your ideal customers are</p>
+                    </div>
+                    <form id="agent-form" autocomplete="off">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="target-industry">Target Industry</label>
+                                <input type="text" id="target-industry" placeholder="e.g. HR tech SaaS" required>
+                                <span class="form-hint">The industry vertical you want to target</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="num-leads">Number of Leads</label>
+                                <div class="range-wrapper">
+                                    <input type="range" id="num-leads" min="3" max="20" value="10">
+                                    <output id="num-leads-value" class="range-value">10</output>
+                                </div>
+                                <span class="form-hint">More leads = longer search time</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="icp-description">Ideal Customer Profile (ICP)</label>
+                            <textarea id="icp-description" rows="3" placeholder="e.g. US-based, 50-200 employees, Series A or B funded" required></textarea>
+                            <span class="form-hint">Describe your perfect customer — the AI uses this to score every lead</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="sender-context">Your Pitch <span class="label-optional">(optional)</span></label>
+                            <textarea id="sender-context" rows="2" placeholder="e.g. I build AI-powered automation tools that help SaaS companies reduce manual operations"></textarea>
+                            <span class="form-hint">Used to personalize the outreach emails</span>
+                        </div>
+                        <button type="submit" class="btn-launch" id="btn-launch">
+                            <span class="btn-launch__icon">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+                            </span>
+                            <span class="btn-launch__text">Launch Agent</span>
+                            <span class="btn-launch__loader" hidden>
+                                <span class="spinner"></span>Running...
+                            </span>
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Pipeline Progress -->
+            <section class="pipeline-section" id="pipeline-section" hidden>
+                <div class="glass-card pipeline-card">
+                    <h2 class="section-title">Agent Pipeline</h2>
+                    <div class="pipeline" id="pipeline">
+                        <div class="pipeline-step" data-step="search">
+                            <div class="step-circle">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                                <svg class="step-check" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                            </div>
+                            <span class="step-label">Search</span>
+                        </div>
+                        <div class="pipeline-connector"><div class="connector-fill"></div></div>
+                        <div class="pipeline-step" data-step="enrich">
+                            <div class="step-circle">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+                                <svg class="step-check" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                            </div>
+                            <span class="step-label">Enrich</span>
+                        </div>
+                        <div class="pipeline-connector"><div class="connector-fill"></div></div>
+                        <div class="pipeline-step" data-step="score">
+                            <div class="step-circle">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                                <svg class="step-check" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                            </div>
+                            <span class="step-label">Score</span>
+                        </div>
+                        <div class="pipeline-connector"><div class="connector-fill"></div></div>
+                        <div class="pipeline-step" data-step="email">
+                            <div class="step-circle">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 7L2 7"/></svg>
+                                <svg class="step-check" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                            </div>
+                            <span class="step-label">Email</span>
+                        </div>
+                    </div>
+
+                    <!-- Terminal Log -->
+                    <div class="terminal" id="terminal">
+                        <div class="terminal__header">
+                            <div class="terminal__dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                            <span class="terminal__title">Agent Output</span>
+                        </div>
+                        <div class="terminal__body" id="log-output"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results -->
+            <section class="results-section" id="results-section" hidden>
+                <div class="results-header">
+                    <h2 class="section-title">Results</h2>
+                    <div class="results-summary" id="results-summary"></div>
+                </div>
+                <div class="results-stats" id="results-stats"></div>
+                <div class="results-grid" id="results-grid"></div>
+                <button class="btn-reset" id="btn-reset">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                    Run Again
+                </button>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>Built with <span class="footer__heart">♥</span> using LangGraph, Groq, and Tavily</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
