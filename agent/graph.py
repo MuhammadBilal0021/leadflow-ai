@@ -1,182 +1,78 @@
-# agent/graph.py
-# -----------------------------------------------------------------
-# LangGraph pipeline: search -> enrich -> score -> email
-# The enrich step fetches real company homepage content so the
-# scorer has actual data to work with, not just search snippets.
-# -----------------------------------------------------------------
-
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+"""A fixed, observable search -> enrich -> score -> draft LangGraph workflow."""
+from functools import wraps
+import time
 from langgraph.graph import StateGraph, END
 from agent.state import AgentState
+from agent.runtime import check_run, emit, current_run
 from tools.search import search_companies, extract_company_info
 from tools.scraper import enrich_all_leads
 from tools.scorer import score_all_leads
 from tools.email_writer import write_all_emails
 
-# Score threshold for "qualified" — set to 40 during testing
-QUALIFIED_THRESHOLD = 40
+
+def stage(name):
+    def decorate(fn):
+        @wraps(fn)
+        def run(state):
+            check_run()
+            emit({"type": "stage", "stage": name})
+            start = time.monotonic()
+            try:
+                return fn(state)
+            finally:
+                context = current_run.get()
+                if context:
+                    context.metrics["stage_seconds"][name] = round(time.monotonic() - start, 3)
+        return run
+    return decorate
 
 
-def dedup_leads(leads: list) -> list:
-    """
-    Removes duplicate leads by website URL.
-    Runs before scoring so we don't waste API calls on duplicates.
-    """
-    seen = set()
-    unique = []
-    for lead in leads:
-        url = lead.get("website", "")
-        if url not in seen:
-            seen.add(url)
-            unique.append(lead)
-    return unique
-
-
-def search_node(state: AgentState) -> dict:
-    print("\n[Agent] Searching for companies...")
-
-    result = search_companies(
-        target_industry=state["target_industry"],
-        icp_description=state["icp_description"],
-        already_searched=state.get("search_queries", []),
-        num_results=state.get("num_leads", 10),
-    )
-
+@stage("search")
+def search_node(state):
+    result = search_companies(state["target_industry"], state["icp_description"],
+                              state.get("search_queries", []), state.get("num_leads", 10))
     if result["error"]:
-        print(f"[Agent] Search warning: {result['error']}")
-        return {
-            "leads": [],
-            "search_queries": state.get("search_queries", []) + result.get("queries_used", []),
-            "errors": state.get("errors", []) + [result["error"]],
-        }
-
-    raw_leads = [extract_company_info(r) for r in result["results"]]
-    print(f"[Agent] Found {len(raw_leads)} companies")
-
-    return {
-        "leads": raw_leads,
-        "search_queries": state.get("search_queries", []) + result.get("queries_used", []),
-        "errors": state.get("errors", []),
-    }
+        return {"leads": [], "errors": [result["error"]], "status": "failed",
+                "is_complete": False, "final_summary": result["error"]}
+    return {"leads": [extract_company_info(raw) for raw in result["results"]],
+            "search_queries": result["queries_used"], "errors": result.get("warnings", [])}
 
 
-def enrich_node(state: AgentState) -> dict:
-    """Scrapes company websites to get richer descriptions before scoring."""
-    print("\n[Agent] Enriching lead descriptions from company websites...")
-
-    leads = state.get("leads", [])
-    if not leads:
-        print("[Agent] No leads to enrich -- skipping")
-        return {"leads": []}
-
-    enriched = enrich_all_leads(leads)
-    print(f"[Agent] Enriched {len(enriched)} leads")
-
-    return {"leads": enriched}
+@stage("enrich")
+def enrich_node(state):
+    return {"leads": enrich_all_leads(state.get("leads", []))}
 
 
-def score_node(state: AgentState) -> dict:
-    print("\n[Agent] Scoring leads...")
-
-    leads = state.get("leads", [])
-
-    if not leads:
-        print("[Agent] No leads to score -- skipping")
-        return {"leads": []}
-
-    # Deduplicate before scoring -- fixes the repeated leads issue
-    unique_leads = dedup_leads(leads)
-    print(f"[Agent] Deduped: {len(leads)} -> {len(unique_leads)} unique leads")
-
-    scored_leads = score_all_leads(unique_leads, state["icp_description"])
-    high_quality = [l for l in scored_leads if l["score"] >= QUALIFIED_THRESHOLD]
-    print(f"[Agent] {len(high_quality)}/{len(scored_leads)} leads scored {QUALIFIED_THRESHOLD}+")
-
-    return {"leads": scored_leads}
+@stage("score")
+def score_node(state):
+    return {"leads": score_all_leads(state.get("leads", []), state["icp_description"],
+        state["target_industry"], state.get("qualification_criteria", []))}
 
 
-def email_node(state: AgentState) -> dict:
-    print("\n[Agent] Writing emails...")
-
-    leads = state.get("leads", [])
-
-    # Deduplicate again as a safety net
-    leads = dedup_leads(leads)
-
-    sender_context = "I build AI-powered automation tools that help SaaS companies reduce manual operations"
-
-    leads_with_emails = write_all_emails(
-        leads=leads,
-        icp_description=state["icp_description"],
-        sender_context=sender_context,
-    )
-
-    total = len(leads_with_emails)
-    qualified = len([l for l in leads_with_emails if l["score"] >= QUALIFIED_THRESHOLD])
-    avg_score = sum(l["score"] for l in leads_with_emails) / total if total > 0 else 0
-
-    summary = (
-        f"Found {total} companies. "
-        f"{qualified} qualified leads (score {QUALIFIED_THRESHOLD}+). "
-        f"Average score: {avg_score:.0f}/100."
-    )
-
-    print(f"\n[Agent] Done. {summary}")
-
-    return {
-        "leads": leads_with_emails,
-        "is_complete": True,
-        "final_summary": summary,
-    }
+@stage("email")
+def email_node(state):
+    leads = write_all_emails(state.get("leads", []), state["icp_description"], state["sender_context"])
+    failures = sum(l.get("scoring_status") == "failed" or l.get("email_status") == "failed" for l in leads)
+    errors = list(state.get("errors", []))
+    if failures:
+        errors.append(f"{failures} leads have unavailable scoring or drafts.")
+    qualified = sum(l["qualification_status"] == "qualified" for l in leads)
+    review = sum(l["qualification_status"] == "needs_review" for l in leads)
+    return {"leads": leads, "is_complete": True, "status": "partial" if errors else "complete",
+            "errors": errors,
+            "final_summary": f"Found {len(leads)} candidates. {qualified} source-supported matches; "
+                             f"{review} need review. Email drafts require human review."}
 
 
 def build_graph():
     graph = StateGraph(AgentState)
-
-    graph.add_node("search", search_node)
-    graph.add_node("enrich", enrich_node)
-    graph.add_node("score", score_node)
-    graph.add_node("email", email_node)
-
+    for name, fn in [("search", search_node), ("enrich", enrich_node),
+                     ("score", score_node), ("email", email_node)]:
+        graph.add_node(name, fn)
     graph.set_entry_point("search")
-    graph.add_edge("search", "enrich")
+    graph.add_conditional_edges("search", lambda state: "failed" if state.get("status") == "failed" else "ok",
+                               {"failed": END, "ok": "enrich"})
     graph.add_edge("enrich", "score")
     graph.add_edge("score", "email")
     graph.add_edge("email", END)
-
     return graph.compile()
-
-
-if __name__ == "__main__":
-    print("Testing full agent graph...\n")
-
-    agent = build_graph()
-
-    initial_state = {
-        "target_industry": "HR tech SaaS",
-        "icp_description": "US-based, 50-200 employees, Series A or B funded",
-        "num_leads": 10,
-        "leads": [],
-        "search_queries": [],
-        "errors": [],
-        "is_complete": False,
-        "final_summary": "",
-    }
-
-    result = agent.invoke(initial_state)
-
-    print("\n" + "="*50)
-    print("FINAL RESULTS")
-    print("="*50)
-    print(f"\n{result['final_summary']}\n")
-
-    for lead in result["leads"]:
-        print(f"Company : {lead['company_name']}")
-        print(f"URL     : {lead['website']}")
-        print(f"Score   : {lead['score']}/100 -- {lead['score_reason']}")
-        if lead['score'] >= QUALIFIED_THRESHOLD:
-            print(f"Email   :\n{lead['email_draft']}")
-        print("-" * 40)

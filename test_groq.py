@@ -1,16 +1,16 @@
-import os
-from groq import Groq
-from dotenv import load_dotenv
+"""Opt-in live smoke check. Importing this file never spends API credits."""
+def main():
+    from dotenv import load_dotenv
+    from pydantic import BaseModel
+    from tools.llm import complete_json
+    load_dotenv()
 
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=15.0)
+    class Greeting(BaseModel):
+        greeting: str
 
-print("Starting Groq request with model:", os.getenv("GROQ_MODEL"))
-try:
-    response = client.chat.completions.create(
-        model=os.getenv("GROQ_MODEL"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-    print("Success:", response.choices[0].message.content)
-except Exception as e:
-    print("Error:", repr(e))
+    result = complete_json("Return a short greeting.", {"request": "hello"}, Greeting)
+    print(result.greeting)
+
+
+if __name__ == "__main__":
+    main()

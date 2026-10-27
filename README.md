@@ -1,79 +1,128 @@
-# LeadFlow AI 🚀
+# LeadFlow AI
 
-LeadFlow AI is an end-to-end AI Lead Generation and Outreach Agent built with **LangGraph**, **Tavily**, **Groq (Llama 3)**, and **FastAPI**. It automates the process of finding, enriching, scoring, and drafting personalized outreach emails for potential leads based on your Ideal Customer Profile (ICP).
+A source-backed company research and outreach drafting app built with FastAPI, LangGraph, Tavily, and Groq. Discover candidates, inspect the evidence behind their qualification, and review personalized drafts.
 
-## 🌟 Features
+This is a fixed four-stage AI workflow. It does not find verified recipient addresses or send emails.
 
-- **Automated Search & Enrichment**: Uses Tavily to discover companies matching your target industry and ICP.
-- **Intelligent Scoring**: Evaluates each lead using Llama 3 (via Groq) to determine the fit and assigns a score with a detailed reason.
-- **Personalized Email Drafting**: Automatically generates highly customized cold outreach emails based on the lead's enriched context.
-- **Real-Time Streaming backend**: Built with FastAPI and Server-Sent Events (SSE) to stream the agent's progress in real-time.
-- **Interactive UI**: A clean, modern interface to input your targeting criteria and view results dynamically.
+![Fictional sample results](docs/screenshots/sample-results.png)
 
-## 🛠️ Tech Stack
+## Run the sample without API keys
 
-- **Framework**: [LangGraph](https://python.langchain.com/docs/langgraph)
-- **LLM Provider**: [Groq](https://groq.com/) (Llama 3.3 70B)
-- **Search API**: [Tavily](https://tavily.com/)
-- **Backend**: [FastAPI](https://fastapi.tiangolo.com/) & Uvicorn
-- **Frontend**: HTML/JS with Tailwind CSS (or Custom UI)
+Use Python 3.12 or 3.13. Node 22+ is only needed for frontend tests.
 
-## 🚀 Getting Started
+Windows PowerShell:
 
-### Prerequisites
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock
+.\.venv\Scripts\python.exe app.py
+```
 
-- Python 3.9+
-- [Groq API Key](https://console.groq.com/keys)
-- [Tavily API Key](https://app.tavily.com/home)
+macOS / Linux:
 
-### Installation
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python app.py
+```
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/leadflow-ai.git
-   cd leadflow-ai
-   ```
+Open [localhost](http://127.0.0.1:8000) and click **Try fictional sample**. The six sample companies, sources, labels and draft examples are fictional. Sample targeting is fixed to HR tech SaaS in the US, 50-200 employees, Series A or B. Changing your pitch changes the sample drafts. Sample mode makes zero provider calls and costs $0.
 
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use: venv\Scripts\activate
-   ```
+## Enable live research
 
-3. Install the dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Copy `.env.example` to `.env` only if you do not already have a populated `.env`. Preserve existing secrets.
 
-4. Set up environment variables:
-   Copy `.env.example` to `.env` and add your API keys:
-   ```env
-   GROQ_API_KEY=your_groq_api_key
-   TAVILY_API_KEY=your_tavily_api_key
-   ```
+Set `GROQ_API_KEY`, `TAVILY_API_KEY`, and a long random `APP_ACCESS_TOKEN`. Generate a token locally:
 
-### Running the Application
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
-1. Start the FastAPI server:
-   ```bash
-   python app.py
-   ```
-   *(or run `uvicorn app:app --host 0.0.0.0 --port 8000 --reload`)*
+Restart the server, choose **Live research**, and enter that access token. It stays in page memory and is not included in saved runs. All three settings are required to enable live runs. The model is configurable with `GROQ_MODEL`; confirm that your provider account supports it.
 
-2. Open your browser and navigate to:
-   ```text
-   http://localhost:8000
-   ```
+The browser submits industry, the full ICP, up to eight extra must-match requirements, a sender offer, and 1-20 desired candidates. Discovery can return fewer candidates. LinkedIn/Crunchbase profiles remain profile URLs; the app does not guess their company domains or scrape directory homepages as company evidence.
 
-3. Enter your target industry and ICP, and let the agent do the heavy lifting!
+## How qualification works
 
-## 📂 Project Structure
+- Search snippets and company pages are saved with their source URL and retrieval timestamp.
+- The model assesses industry, the complete ICP, and every additional requirement.
+- Every match or contradiction must cite an exact quote present in the retrieved text.
+- **Source-supported match:** all requirements have cited matches and the validated score is at least 60.
+- **Needs review:** missing evidence, invalid scoring, or a score below 60 without a cited contradiction. Unknown evidence caps the score at 59.
+- **Not qualified:** at least one cited contradiction. The score is capped at 39.
+- Industry, location, employee count and funding show a source-supported value or **unknown**.
+- Only qualified leads receive drafts. Your actual offer is used. All drafts require human review.
 
-- `agent/`: Contains the LangGraph workflow (`graph.py`, `state.py`).
-- `tools/`: Individual tool implementations (e.g., search, enrichment, scoring, email writing).
-- `app.py`: FastAPI server handling the API endpoints and SSE streaming.
-- `static/`: Frontend assets (HTML, CSS, JS).
+An exact quote establishes what a source says. It does not independently establish truth, company identity, freshness, or semantic correctness. Prompt injection and incorrect model interpretation remain possible; review the evidence before outreach.
 
-## 📝 License
+## Saved runs and exports
 
-This project is licensed under the MIT License.
+Completed, partial, and failed-search reports are saved in SQLite. A random HttpOnly, SameSite=Strict cookie limits history, reading, export, and deletion to that browser session. Clearing cookies loses access. An access token alone cannot retrieve someone else's saved runs.
+
+Retention is up to seven days, with at most 50 reports per session and 500 globally. The default database is `data/runs.sqlite3`; override it with `LEADFLOW_DB`. The database contains your pitch, targeting and retrieved company information, so keep it private. No provider keys or live access tokens are saved in reports.
+
+CSV export includes evidence, facts and criteria, and escapes spreadsheet formula prefixes. You can delete a saved report from history.
+
+## Limits and deployment
+
+Default protections:
+
+- No paid runs without the configured live access token.
+- Two simultaneous workers per process; 240-second cooperative run deadline.
+- Ten starts per session per rolling hour, 30 per client IP per rolling hour, and `MAX_LIVE_RUNS_PER_DAY` live starts per rolling 24 hours (default 50).
+- Shared live budget is transactional in SQLite. Failed/cancelled starts still consume quota.
+- Input size limits, safe text rendering, same-origin mutation checks and security headers.
+- Scraping permits only public HTTP(S) addresses on standard ports, validates all DNS answers and redirects, and connects to the validated IP with TLS hostname verification.
+- Scraping limits redirects, time and bytes, rejects compressed responses, and does not use environment HTTP proxies.
+- Disconnecting cancels future work. An in-flight network request may finish before cancellation is observed. DNS resolver delays can outlive the cooperative deadline.
+
+Run **one Uvicorn worker** for this version. The concurrency semaphore is process-local. Use the default loopback binding for local work. For an internet-facing deployment, put it behind HTTPS and an authenticated reverse proxy with request/time/rate limits, set `COOKIE_SECURE=true`, and restrict outbound networking at the infrastructure layer. Do not distribute the live access token to anonymous demo visitors. Proxy clients share the proxy IP quota unless you add a trusted-proxy design; arbitrary forwarded headers are deliberately ignored.
+
+This remains a small single-instance app, not a multi-tenant SaaS deployment.
+
+## Usage and cost
+
+Each report records wall time, stage durations, model/search calls, reported search credits, and input/output tokens. Add your own plan rates to `.env` to calculate estimated total cost and cost per qualified lead:
+
+- `GROQ_INPUT_USD_PER_MILLION`
+- `GROQ_OUTPUT_USD_PER_MILLION`
+- `TAVILY_USD_PER_CREDIT`
+
+Blank rates mean **unavailable**, not zero. Estimates are not invoices: failed requests and unreported usage may be excluded. Sample mode always records zero API usage.
+
+## Tests, evaluation and dependency checks
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --test tests/frontend.test.cjs
+.\.venv\Scripts\python.exe -m evals.evaluate
+.\.venv\Scripts\python.exe -m scripts.benchmark
+.\.venv\Scripts\python.exe -m pip_audit -r requirements.lock --disable-pip --no-deps --strict
+```
+
+Use `.venv/bin/python` instead on macOS/Linux.
+
+The default evaluation uses six manually labelled fictional cases and supplied model assessments to check the qualification rules. Its accuracy, precision and recall describe **policy regression**, not live model performance. To evaluate your configured model against the same fixed evidence, explicitly opt into a paid model evaluation:
+
+```bash
+python -m evals.evaluate --live --output evals/live-results.json
+```
+
+This uses Groq credits, does not search/scrape, and does not measure real-world discovery quality. Expand the labelled dataset with genuine, permissioned source snapshots before making portfolio accuracy claims. `test_groq.py` is also an explicitly invoked live smoke check; importing it never calls the API.
+
+CI runs backend/frontend tests, the offline evaluation, and the lockfile advisory scan on Python 3.12 and 3.13. It requires no API secrets. Refresh dependency pins and the complete lock together, then rerun tests and the scan. An audit only covers advisories known at scan time.
+
+## Architecture and portfolio notes
+
+See [architecture](docs/architecture.md), [security boundaries](docs/security.md), and [verification results](docs/verification.md).
+
+A useful portfolio description:
+
+> Built an evidence-backed lead research workflow using FastAPI and LangGraph, with streamed progress, exact-quote validation, conservative qualification, isolated execution, session-owned reports, CSV export, and automated security regressions.
+
+Describe measured live results separately from fictional walkthroughs. Strong next steps are a larger real-world evaluation set, verified company-domain resolution, configurable human review, and durable job workers before horizontal scaling.
+
+MIT licensed; see [LICENSE](LICENSE).

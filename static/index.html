@@ -42,7 +42,7 @@
                         AI-Powered Lead Generation
                     </div>
                     <h1 class="hero__title">Find, Score &amp; Reach<br><span class="gradient-text">Your Ideal Customers</span></h1>
-                    <p class="hero__subtitle">Enter your target industry and ideal customer profile. Our AI agent searches the web, enriches company data, scores leads, and writes personalized outreach emails — all in seconds.</p>
+                    <p class="hero__subtitle">Discover companies, inspect source evidence, and draft outreach for the leads that match your requirements.</p>
                 </div>
             </section>
 
@@ -53,17 +53,23 @@
                         <h2>Configure Your Search</h2>
                         <p>Define who your ideal customers are</p>
                     </div>
+                    <div class="run-controls"><button id="try-sample" type="button" class="btn-reset">Try fictional sample</button><button id="btn-stop" type="button" class="btn-reset" hidden>Cancel run</button></div>
+                    <p id="app-notice" role="status" aria-live="polite">Loading session...</p>
                     <form id="agent-form" autocomplete="off">
+                        <div class="form-grid">
+                            <div class="form-group"><label for="run-mode">Research mode</label><select id="run-mode"><option value="sample">Fictional sample - no API calls</option><option id="live-option" value="live" disabled>Live research</option></select></div>
+                            <div id="live-access" class="form-group" hidden><label for="live-token">Live access token</label><input id="live-token" type="password" maxlength="256" autocomplete="off"><span class="form-hint">Kept only in this page; never saved with a run.</span></div>
+                        </div>
                         <div class="form-grid">
                             <div class="form-group">
                                 <label for="target-industry">Target Industry</label>
-                                <input type="text" id="target-industry" placeholder="e.g. HR tech SaaS" required>
+                                <input type="text" id="target-industry" minlength="2" maxlength="200" placeholder="e.g. HR tech SaaS" required>
                                 <span class="form-hint">The industry vertical you want to target</span>
                             </div>
                             <div class="form-group">
                                 <label for="num-leads">Number of Leads</label>
                                 <div class="range-wrapper">
-                                    <input type="range" id="num-leads" min="3" max="20" value="10">
+                                    <input type="range" id="num-leads" min="1" max="20" value="10">
                                     <output id="num-leads-value" class="range-value">10</output>
                                 </div>
                                 <span class="form-hint">More leads = longer search time</span>
@@ -71,14 +77,15 @@
                         </div>
                         <div class="form-group">
                             <label for="icp-description">Ideal Customer Profile (ICP)</label>
-                            <textarea id="icp-description" rows="3" placeholder="e.g. US-based, 50-200 employees, Series A or B funded" required></textarea>
+                            <textarea id="icp-description" minlength="5" maxlength="1500" rows="3" placeholder="e.g. US-based, 50-200 employees, Series A or B funded" required></textarea>
                             <span class="form-hint">Describe your perfect customer — the AI uses this to score every lead</span>
                         </div>
                         <div class="form-group">
                             <label for="sender-context">Your Pitch <span class="label-optional">(optional)</span></label>
-                            <textarea id="sender-context" rows="2" placeholder="e.g. I build AI-powered automation tools that help SaaS companies reduce manual operations"></textarea>
+                            <textarea id="sender-context" minlength="5" maxlength="1500" rows="2" placeholder="e.g. I build AI-powered automation tools that help SaaS companies reduce manual operations"></textarea>
                             <span class="form-hint">Used to personalize the outreach emails</span>
                         </div>
+                        <div class="form-group"><label for="qualification-criteria">Additional must-match requirements <span class="label-optional">(optional)</span></label><textarea id="qualification-criteria" rows="3" maxlength="2000" placeholder="One requirement per line, up to 8"></textarea><span class="form-hint">The industry and full ICP are always checked. Missing evidence requires review.</span></div>
                         <button type="submit" class="btn-launch" id="btn-launch">
                             <span class="btn-launch__icon">
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
@@ -138,7 +145,7 @@
                             </div>
                             <span class="terminal__title">Agent Output</span>
                         </div>
-                        <div class="terminal__body" id="log-output"></div>
+                        <div class="terminal__body" id="log-output" role="log" aria-live="polite"></div>
                     </div>
                 </div>
             </section>
@@ -149,6 +156,7 @@
                     <h2 class="section-title">Results</h2>
                     <div class="results-summary" id="results-summary"></div>
                 </div>
+                <div id="run-metrics"></div>
                 <div class="results-stats" id="results-stats"></div>
                 <div class="results-grid" id="results-grid"></div>
                 <button class="btn-reset" id="btn-reset">
@@ -156,6 +164,7 @@
                     Run Again
                 </button>
             </section>
+            <section class="glass-card history-card" aria-labelledby="history-title"><h2 id="history-title">Saved runs</h2><p>Private to this browser session. Retained for up to 7 days; clearing cookies loses access.</p><div id="run-history"></div></section>
         </main>
 
         <footer class="footer">

@@ -1,0 +1,106 @@
+{
+  "notice": "Fictional companies and manually labelled synthetic evidence. This is a policy regression set, not a real-world benchmark.",
+  "industry": "HR tech SaaS",
+  "icp": "US-based, 50-200 employees, Series A or B funded",
+  "cases": [
+    {
+      "id": "complete_fit",
+      "name": "HireAtlas",
+      "text": "HireAtlas is a US-based HR tech SaaS company with 80 employees and Series A funding.",
+      "expected": "qualified",
+      "verdicts": [
+        "match",
+        "match"
+      ],
+      "score": 90,
+      "facts": {
+        "industry": "HR tech SaaS",
+        "location": "US-based",
+        "employees": "80 employees",
+        "funding": "Series A"
+      }
+    },
+    {
+      "id": "second_fit",
+      "name": "PeopleHarbor",
+      "text": "PeopleHarbor is a US-based HR tech SaaS company with 120 employees and Series B funding.",
+      "expected": "qualified",
+      "verdicts": [
+        "match",
+        "match"
+      ],
+      "score": 85,
+      "facts": {
+        "industry": "HR tech SaaS",
+        "location": "US-based",
+        "employees": "120 employees",
+        "funding": "Series B"
+      }
+    },
+    {
+      "id": "missing_size",
+      "name": "CedarHire",
+      "text": "CedarHire is a US-based HR tech SaaS company. Employee count and funding have not been disclosed.",
+      "expected": "needs_review",
+      "verdicts": [
+        "match",
+        "unknown"
+      ],
+      "score": 80,
+      "facts": {
+        "industry": "HR tech SaaS",
+        "location": "US-based"
+      }
+    },
+    {
+      "id": "wrong_country",
+      "name": "MapleTeam",
+      "text": "MapleTeam is a Canada-based HR tech SaaS company with 80 employees and Series A funding.",
+      "expected": "not_qualified",
+      "verdicts": [
+        "match",
+        "mismatch"
+      ],
+      "score": 75,
+      "facts": {
+        "industry": "HR tech SaaS",
+        "location": "Canada-based",
+        "employees": "80 employees",
+        "funding": "Series A"
+      }
+    },
+    {
+      "id": "wrong_industry",
+      "name": "CobaltConsult",
+      "text": "CobaltConsult is a US-based accounting consultancy with 80 employees and Series A funding.",
+      "expected": "not_qualified",
+      "verdicts": [
+        "mismatch",
+        "match"
+      ],
+      "score": 65,
+      "facts": {
+        "industry": "accounting consultancy",
+        "location": "US-based",
+        "employees": "80 employees",
+        "funding": "Series A"
+      }
+    },
+    {
+      "id": "missing_funding",
+      "name": "OrbitTalent",
+      "text": "OrbitTalent is a US-based HR tech SaaS company with 85 employees. Funding is not disclosed.",
+      "expected": "needs_review",
+      "verdicts": [
+        "match",
+        "unknown"
+      ],
+      "score": 88,
+      "facts": {
+        "industry": "HR tech SaaS",
+        "location": "US-based",
+        "employees": "85 employees"
+      }
+    }
+  ]
+}

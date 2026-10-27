@@ -6,3 +6,8 @@ __pycache__/
 .pytest_cache/
 *.log
 .DS_Store
+.venv/
+data/
+.coverage
+htmlcov/
+evals/latest.json

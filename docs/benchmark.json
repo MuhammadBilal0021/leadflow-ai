@@ -1,0 +1,12 @@
+{
+  "measurement": "offline_sse_with_mocked_200ms_provider",
+  "created_at": "2026-10-27T17:15:34.917434+00:00",
+  "elapsed_seconds": 0.2116,
+  "ten_ms_heartbeat_actual_seconds": 0.0189,
+  "stream_event_types": [
+    "result",
+    "done"
+  ],
+  "provider_calls": 0,
+  "limitations": "Measures streaming responsiveness with mocked work, not live provider speed or accuracy."
+}

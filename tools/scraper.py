@@ -1,146 +1,120 @@
-# tools/scraper.py
-# -----------------------------------------------------------------
-# Fetches a company's homepage and extracts a clean text summary.
-# Used to ENRICH lead descriptions before scoring so the scorer
-# has real company info (not just a search snippet).
-#
-# Test standalone:
-#   python tools/scraper.py
-# -----------------------------------------------------------------
+"""Bounded fetching pinned to a validated IP, with TLS hostname verification."""
+from datetime import datetime, timezone
+import socket
+import time
+from urllib.parse import urlsplit, urljoin
 
-import requests
 from bs4 import BeautifulSoup
-from typing import Dict, Optional
+import urllib3
+
+from agent.runtime import check_run, RunStopped
+from tools.urls import clean_url, profile_kind, public_ip
+
+MAX_BYTES = 512 * 1024
+MAX_REDIRECTS = 3
 
 
-# Pages we specifically want to try scraping (in priority order)
-USEFUL_PATHS = ["/about", "/about-us", "/company", ""]
+def public_addresses(host, port):
+    answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    addresses = list(dict.fromkeys(item[4][0] for item in answers))
+    if not addresses:
+        raise ValueError("No DNS addresses")
+    for address in addresses:
+        if not public_ip(address):
+            raise ValueError("Blocked non-public DNS address")
+    return addresses
 
 
-def scrape_company_page(url: str, timeout: int = 8) -> Optional[str]:
-    """
-    Fetches a URL and extracts clean text content from the page.
-    Returns up to 800 chars of meaningful text, or None on failure.
-    """
-    try:
-        # Normalize URL to root domain
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-
-        best_text = ""
-
-        for path in USEFUL_PATHS:
-            try:
-                target = base_url + path
-                resp = requests.get(
-                    target,
-                    timeout=timeout,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    },
-                    allow_redirects=True,
-                )
-                if resp.status_code != 200:
-                    continue
-
-                soup = BeautifulSoup(resp.text, "html.parser")
-
-                # Remove scripts, styles, navs, footers
-                for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "iframe"]):
-                    tag.decompose()
-
-                # Try to get meta description first (usually the best summary)
-                meta_desc = ""
-                meta_tag = soup.find("meta", attrs={"name": "description"})
-                if meta_tag and meta_tag.get("content"):
-                    meta_desc = meta_tag["content"].strip()
-
-                # Get the page title
-                page_title = ""
-                if soup.title and soup.title.string:
-                    page_title = soup.title.string.strip()
-
-                # Get body text
-                body_text = soup.get_text(separator=" ", strip=True)
-                # Clean up excessive whitespace
-                body_text = " ".join(body_text.split())
-
-                # Build the enriched description
-                parts = []
-                if page_title:
-                    parts.append(f"Company: {page_title}.")
-                if meta_desc:
-                    parts.append(f"About: {meta_desc}")
-                if body_text:
-                    # Take meaningful body text (skip very short pages)
-                    if len(body_text) > 50:
-                        parts.append(f"Details: {body_text[:500]}")
-
-                combined = " ".join(parts)
-
-                # Keep the longest/richest result we find across paths
-                if len(combined) > len(best_text):
-                    best_text = combined
-
-                # If we got a good result from /about, stop early
-                if path in ["/about", "/about-us", "/company"] and len(combined) > 200:
-                    break
-
-            except Exception:
+def fetch_html(url, timeout=10):
+    deadline = time.monotonic() + timeout
+    for _ in range(MAX_REDIRECTS + 1):
+        check_run()
+        url = clean_url(url)
+        parsed = urlsplit(url)
+        port = 443 if parsed.scheme == "https" else 80
+        address = public_addresses(parsed.hostname, port)[0]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Fetch deadline exceeded")
+        options = dict(host=address, port=port, maxsize=1, retries=False,
+                       timeout=urllib3.Timeout(connect=min(3, remaining), read=min(3, remaining)))
+        if parsed.scheme == "https":
+            pool = urllib3.HTTPSConnectionPool(**options, server_hostname=parsed.hostname,
+                                              assert_hostname=parsed.hostname, cert_reqs="CERT_REQUIRED")
+        else:
+            pool = urllib3.HTTPConnectionPool(**options)
+        response = None
+        try:
+            path = parsed.path + ("?" + parsed.query if parsed.query else "")
+            response = pool.urlopen("GET", path, headers={"Host": parsed.netloc,
+                "User-Agent": "LeadFlowResearch/1.0", "Accept": "text/html", "Accept-Encoding": "identity"},
+                redirect=False, preload_content=False, retries=False)
+            if response.status in {301, 302, 303, 307, 308}:
+                url = urljoin(url, response.headers.get("Location", ""))
                 continue
+            if response.status != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
+                raise ValueError("Not an HTML success response")
+            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                raise ValueError("Compressed responses are not accepted")
+            if int(response.headers.get("Content-Length", "0")) > MAX_BYTES:
+                raise ValueError("Page too large")
+            body = bytearray()
+            while True:
+                check_run()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Fetch deadline exceeded")
+                connection = response.connection
+                if connection and connection.sock:
+                    connection.sock.settimeout(min(3, remaining))
+                chunk = response.read1(min(32768, MAX_BYTES + 1 - len(body)), decode_content=False)
+                if not chunk:
+                    return bytes(body).decode("utf-8", errors="replace"), url
+                body.extend(chunk)
+                if len(body) > MAX_BYTES:
+                    raise ValueError("Page too large")
+        finally:
+            if response:
+                response.close()
+            pool.close()
+    raise ValueError("Too many redirects")
 
-        return best_text[:800] if best_text else None
 
-    except Exception as e:
-        print(f"  [Scraper] Failed for {url}: {e}")
-        return None
+def page_text(html):
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "iframe"]):
+        tag.decompose()
+    meta = soup.find("meta", attrs={"name": "description"})
+    description = meta.get("content", "") if meta else ""
+    return " ".join((description + " " + soup.get_text(" ", strip=True)).split())[:6000]
 
 
-def enrich_lead(lead: Dict) -> Dict:
-    """
-    Enriches a single lead's description by scraping its website.
-    If scraping fails, keeps the original description.
-    """
-    url = lead.get("website", "")
-    if not url:
+def enrich_lead(lead):
+    check_run()
+    lead = dict(lead)
+    url = lead.get("website")
+    if not url or profile_kind(url):
+        lead["enrichment_status"] = "profile_only"
         return lead
-
-    original_desc = lead.get("description", "")
-    print(f"  [Scraper] Enriching: {lead.get('company_name', '?')} ({url})")
-
-    scraped = scrape_company_page(url)
-
-    if scraped and len(scraped) > len(original_desc):
-        # Combine: keep original snippet + add scraped context
-        lead["description"] = f"{original_desc}\n\n--- Scraped from website ---\n{scraped}"
-        print(f"  [Scraper] Enriched with {len(scraped)} chars of website content")
-    else:
-        print(f"  [Scraper] No improvement found, keeping original description")
-
+    base = urlsplit(url)
+    for path in ["/about", "/"]:
+        try:
+            html, final_url = fetch_html(f"{base.scheme}://{base.netloc}{path}")
+            text = page_text(html)
+            if len(text) < 80:
+                continue
+            sources = list(lead.get("sources", []))
+            sources.append({"id": f"s{len(sources)}", "url": final_url, "text": text,
+                "kind": "company_page", "retrieved_at": datetime.now(timezone.utc).isoformat()})
+            lead.update(sources=sources, enrichment_status="enriched")
+            return lead
+        except RunStopped:
+            raise
+        except (ValueError, OSError, urllib3.exceptions.HTTPError):
+            continue
+    lead["enrichment_status"] = "unavailable"
     return lead
 
 
-def enrich_all_leads(leads: list) -> list:
-    """
-    Enriches all leads in the list. Called by the LangGraph enrich node.
-    """
-    enriched = []
-    for lead in leads:
-        enriched.append(enrich_lead(lead))
-    return enriched
-
-
-# -- Standalone test -- run: python tools/scraper.py --
-if __name__ == "__main__":
-    print("Testing scraper tool...\n")
-
-    test_url = "https://factorialhr.com"
-    print(f"Scraping: {test_url}\n")
-
-    result = scrape_company_page(test_url)
-    if result:
-        print(f"Got {len(result)} chars:\n")
-        print(result)
-    else:
-        print("Scraping failed or returned no content.")
+def enrich_all_leads(leads):
+    return [enrich_lead(lead) for lead in leads]

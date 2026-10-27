@@ -1,274 +1,324 @@
-/**
- * LeadFlow AI — Frontend Controller
- */
-
+/* All untrusted content is rendered as text; no dynamic HTML or inline handlers. */
 const STAGES = ['search', 'enrich', 'score', 'email'];
+function element(tag, className = '', text = '') {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = String(text ?? '');
+    return node;
+}
+function safeUrl(value) {
+    if (typeof value !== 'string' || /[\s\\<>"\u0000-\u001f\u007f]/.test(value)) return null;
+    try {
+        const url = new URL(value);
+        if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null;
+        return url.href;
+    } catch { return null; }
+}
+function link(label, value) {
+    const href = safeUrl(value);
+    if (!href) return element('span', '', label);
+    const node = element('a', 'lead-info__url', label);
+    node.href = href;
+    node.target = '_blank';
+    node.rel = 'noopener noreferrer';
+    return node;
+}
 
 class LeadFlowApp {
     constructor() {
-        this.form = document.getElementById('agent-form');
-        this.btnLaunch = document.getElementById('btn-launch');
+        const ids = {
+            form: 'agent-form', btnLaunch: 'btn-launch', pipelineSection: 'pipeline-section',
+            resultsSection: 'results-section', configSection: 'config-section',
+            logOutput: 'log-output', resultsGrid: 'results-grid', resultsStats: 'results-stats',
+            resultsSummary: 'results-summary', btnReset: 'btn-reset', rangeInput: 'num-leads',
+            rangeValue: 'num-leads-value', mode: 'run-mode', liveToken: 'live-token',
+            history: 'run-history', notice: 'app-notice', metrics: 'run-metrics',
+        };
+        for (const [key, id] of Object.entries(ids)) this[key] = document.getElementById(id);
         this.btnText = this.btnLaunch.querySelector('.btn-launch__text');
         this.btnIcon = this.btnLaunch.querySelector('.btn-launch__icon');
         this.btnLoader = this.btnLaunch.querySelector('.btn-launch__loader');
-        this.pipelineSection = document.getElementById('pipeline-section');
-        this.resultsSection = document.getElementById('results-section');
-        this.configSection = document.getElementById('config-section');
-        this.logOutput = document.getElementById('log-output');
-        this.resultsGrid = document.getElementById('results-grid');
-        this.resultsStats = document.getElementById('results-stats');
-        this.resultsSummary = document.getElementById('results-summary');
-        this.btnReset = document.getElementById('btn-reset');
-        this.rangeInput = document.getElementById('num-leads');
-        this.rangeValue = document.getElementById('num-leads-value');
         this.currentStageIdx = -1;
-        this.init();
-    }
-
-    init() {
-        this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+        this.form.addEventListener('submit', event => this.handleSubmit(event));
         this.btnReset.addEventListener('click', () => this.reset());
-        this.rangeInput.addEventListener('input', () => {
-            this.rangeValue.textContent = this.rangeInput.value;
+        this.rangeInput.addEventListener('input', () => { this.rangeValue.textContent = this.rangeInput.value; });
+        document.getElementById('try-sample').addEventListener('click', () => this.sample());
+        document.getElementById('btn-stop').addEventListener('click', () => this.controller?.abort());
+        this.mode.addEventListener('change', () => {
+            document.getElementById('live-access').hidden = this.mode.value !== 'live';
+            this.notice.textContent = this.mode.value === 'sample'
+                ? 'Sample mode uses fictional companies and fixed targeting. No API calls.'
+                : 'Live research uses your configured providers. Review evidence and all drafts before outreach.';
         });
+        this.ready = this.init();
     }
 
-    async handleSubmit(e) {
-        e.preventDefault();
+    async init() {
+        try {
+            const response = await fetch('/api/session');
+            if (!response.ok) throw new Error('Could not create a session. Try again later.');
+            const session = await response.json();
+            document.getElementById('live-option').disabled = !session.live_available;
+            this.notice.textContent = session.demo_notice + (session.live_available ? '' : ' Live mode is not configured.');
+            await this.loadHistory();
+        } catch (error) {
+            this.notice.textContent = error.message;
+            this.btnLaunch.disabled = true;
+        }
+    }
+
+    sample() {
+        this.mode.value = 'sample';
+        this.mode.dispatchEvent(new Event('change'));
+        document.getElementById('target-industry').value = 'HR tech SaaS';
+        document.getElementById('icp-description').value = 'US-based, 50-200 employees, Series A or B funded';
+        document.getElementById('qualification-criteria').value = '';
+        this.rangeInput.value = 6;
+        this.rangeValue.textContent = '6';
+        this.form.requestSubmit();
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+        await this.ready;
+        if (this.btnLaunch.disabled) return;
         const data = {
             target_industry: document.getElementById('target-industry').value.trim(),
             icp_description: document.getElementById('icp-description').value.trim(),
-            num_leads: parseInt(this.rangeInput.value),
+            num_leads: Number(this.rangeInput.value),
             sender_context: document.getElementById('sender-context').value.trim() ||
-                'I build AI-powered automation tools that help SaaS companies reduce manual operations',
+                'I build AI-powered automation tools that reduce manual operations.',
+            qualification_criteria: document.getElementById('qualification-criteria').value
+                .split('\n').map(value => value.trim()).filter(Boolean),
+            demo: this.mode.value === 'sample',
         };
-
+        this.controller = new AbortController();
+        this.receivedResult = false;
+        this.receivedError = false;
         this.setLoading(true);
         this.showPipeline();
-        this.logOutput.innerHTML = '';
+        this.logOutput.replaceChildren();
         this.currentStageIdx = -1;
-
+        let reader;
         try {
-            const resp = await fetch('/api/run', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
+            const headers = { 'Content-Type': 'application/json' };
+            if (!data.demo) headers.Authorization = 'Bearer ' + this.liveToken.value;
+            const response = await fetch('/api/run', {
+                method: 'POST', headers, body: JSON.stringify(data), signal: this.controller.signal,
             });
-            const reader = resp.body.getReader();
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(typeof error.detail === 'string' ? error.detail : 'Invalid input. Check the field limits.');
+            }
+            if (!response.body) throw new Error('Streaming is unavailable in this browser.');
+            reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
-
             while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop();
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const event = JSON.parse(line.slice(6));
-                            this.handleEvent(event);
-                        } catch (_) {}
-                    }
+                const chunk = await reader.read();
+                buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+                const frames = buffer.split(/\r?\n\r?\n/);
+                buffer = frames.pop();
+                for (const frame of frames) {
+                    const line = frame.split(/\r?\n/).find(value => value.startsWith('data: '));
+                    if (line) this.handleEvent(JSON.parse(line.slice(6)));
                 }
+                if (chunk.done) break;
             }
-        } catch (err) {
-            this.appendLog('Connection error: ' + err.message, 'error');
+            if (!this.receivedResult && !this.receivedError) throw new Error('Connection ended before results arrived.');
+        } catch (error) {
+            this.appendLog(error.name === 'AbortError' ? 'Run cancelled. No further work will be scheduled.' : error.message, 'error');
         } finally {
+            reader?.releaseLock();
+            this.controller = null;
             this.setLoading(false);
         }
     }
 
     handleEvent(event) {
-        switch (event.type) {
-            case 'stage': this.advanceStage(event.stage); break;
-            case 'log': this.routeLog(event.message); break;
-            case 'result':
-                this.completeAllStages();
-                this.showResults(event.data);
-                break;
-            case 'error': this.appendLog('Error: ' + event.message, 'error'); break;
+        if (event.type === 'stage') {
+            this.advanceStage(event.stage);
+            this.appendLog('Stage: ' + event.stage, 'stage');
+        } else if (event.type === 'result') {
+            this.receivedResult = true;
+            if (event.data.status !== 'failed') this.completeAllStages();
+            this.showResults(event.data);
+            this.loadHistory();
+        } else if (event.type === 'error') {
+            this.receivedError = true;
+            this.appendLog(event.message, 'error');
         }
     }
 
-    /* ---- Pipeline ---- */
     showPipeline() {
         this.pipelineSection.hidden = false;
         this.resultsSection.hidden = true;
         this.pipelineSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        document.querySelectorAll('.pipeline-step').forEach(s => s.classList.remove('active', 'completed'));
-        document.querySelectorAll('.pipeline-connector').forEach(c => c.classList.remove('filled'));
+        document.querySelectorAll('.pipeline-step').forEach(node => node.classList.remove('active', 'completed'));
+        document.querySelectorAll('.pipeline-connector').forEach(node => node.classList.remove('filled'));
     }
 
     advanceStage(stage) {
-        const idx = STAGES.indexOf(stage);
-        if (idx <= this.currentStageIdx) return;
-        for (let i = 0; i <= this.currentStageIdx; i++) {
-            const el = document.querySelector(`[data-step="${STAGES[i]}"]`);
-            el.classList.remove('active');
-            el.classList.add('completed');
-        }
-        const connectors = document.querySelectorAll('.pipeline-connector');
-        for (let i = 0; i < idx; i++) connectors[i]?.classList.add('filled');
-        document.querySelector(`[data-step="${stage}"]`).classList.add('active');
-        this.currentStageIdx = idx;
+        const index = STAGES.indexOf(stage);
+        if (index < 0 || index <= this.currentStageIdx) return;
+        STAGES.forEach((name, i) => {
+            const node = document.querySelector('[data-step="' + name + '"]');
+            node.classList.toggle('completed', i < index);
+            node.classList.toggle('active', i === index);
+        });
+        document.querySelectorAll('.pipeline-connector').forEach((node, i) => node.classList.toggle('filled', i < index));
+        this.currentStageIdx = index;
     }
 
     completeAllStages() {
-        STAGES.forEach(s => {
-            const el = document.querySelector(`[data-step="${s}"]`);
-            el.classList.remove('active');
-            el.classList.add('completed');
+        document.querySelectorAll('.pipeline-step').forEach(node => {
+            node.classList.remove('active');
+            node.classList.add('completed');
         });
-        document.querySelectorAll('.pipeline-connector').forEach(c => c.classList.add('filled'));
+        document.querySelectorAll('.pipeline-connector').forEach(node => node.classList.add('filled'));
     }
 
-    /* ---- Logging ---- */
-    routeLog(msg) {
-        let cls = '';
-        if (msg.includes('[Agent]')) cls = 'stage';
-        else if (msg.includes('Scored:')) cls = 'scored';
-        else if (msg.includes('Done')) cls = 'success';
-        this.appendLog(msg, cls);
-    }
-
-    appendLog(msg, cls = '') {
-        const div = document.createElement('div');
-        div.className = 'log-line' + (cls ? ' log-line--' + cls : '');
-        div.textContent = '> ' + msg;
-        this.logOutput.appendChild(div);
+    appendLog(message, cls = '') {
+        this.logOutput.appendChild(element('div', 'log-line log-line--' + cls, '> ' + message));
         this.logOutput.scrollTop = this.logOutput.scrollHeight;
     }
 
-    /* ---- Results ---- */
     showResults(data) {
         this.resultsSection.hidden = false;
+        this.resultsSummary.textContent = (data.mode === 'sample' ? 'FICTIONAL SAMPLE - ' : '') + data.summary;
+        this.resultsGrid.replaceChildren();
+        this.resultsStats.replaceChildren();
         const leads = data.leads || [];
-
-        const qualified = leads.filter(l => l.score >= 40);
-        const skipped = leads.filter(l => l.score < 40);
-        const avgScore = leads.length > 0 ? Math.round(leads.reduce((s, l) => s + l.score, 0) / leads.length) : 0;
-
-        this.resultsSummary.textContent = data.summary || '';
-
-        // Stats
-        this.resultsStats.innerHTML = `
-            <div class="stat-card">
-                <div class="stat-value stat-value--indigo">${leads.length}</div>
-                <div class="stat-label">Companies Found</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value stat-value--emerald">${qualified.length}</div>
-                <div class="stat-label">Qualified Leads</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value stat-value--cyan">${avgScore}</div>
-                <div class="stat-label">Avg Score</div>
-            </div>
-        `;
-
-        // Build results
-        this.resultsGrid.innerHTML = '';
-
-        // --- Qualified Leads Section ---
-        if (qualified.length > 0) {
-            const qualSection = document.createElement('div');
-            qualSection.className = 'results-group';
-            qualSection.innerHTML = `
-                <div class="results-group__header results-group__header--qualified">
-                    <span class="results-group__icon">✅</span>
-                    <div>
-                        <h3>Qualified Leads — Ready for Outreach</h3>
-                        <p>These companies match your ICP. Email drafts are ready below — copy and send them!</p>
-                    </div>
-                </div>
-            `;
-            qualified.forEach((lead, i) => qualSection.appendChild(this.createLeadCard(lead, i, true)));
-            this.resultsGrid.appendChild(qualSection);
+        const groups = [
+            ['qualified', 'Source-supported matches', 'Review source evidence and drafts before outreach.'],
+            ['needs_review', 'Needs review', 'Some evidence is missing, ambiguous, or scoring was unavailable.'],
+            ['not_qualified', 'Not qualified', 'At least one requirement has a source-supported contradiction.'],
+        ];
+        for (const [status, title, description] of groups) {
+            const rows = leads.filter(lead => lead.qualification_status === status);
+            const stat = element('div', 'stat-card');
+            stat.append(element('div', 'stat-value', rows.length), element('div', 'stat-label', title));
+            this.resultsStats.appendChild(stat);
+            if (!rows.length) continue;
+            const section = element('section', 'results-group');
+            section.append(element('h3', '', title), element('p', 'lead-info__reason', description));
+            for (const lead of rows) section.appendChild(this.createLeadCard(lead));
+            this.resultsGrid.appendChild(section);
         }
-
-        // --- Skipped Leads Section ---
-        if (skipped.length > 0) {
-            const skipSection = document.createElement('div');
-            skipSection.className = 'results-group';
-            skipSection.innerHTML = `
-                <div class="results-group__header results-group__header--skipped">
-                    <span class="results-group__icon">⛔</span>
-                    <div>
-                        <h3>Skipped — Poor Match</h3>
-                        <p>These didn't match your ICP well enough. No email was generated.</p>
-                    </div>
-                </div>
-            `;
-            skipped.forEach((lead, i) => skipSection.appendChild(this.createLeadCard(lead, i, false)));
-            this.resultsGrid.appendChild(skipSection);
+        if (!leads.length) this.resultsGrid.appendChild(element('p', '', 'No candidates returned. Review the status and warnings.'));
+        for (const warning of data.warnings || []) {
+            this.resultsGrid.appendChild(element('p', 'info-banner', warning));
         }
-
-        // Info banner
-        const banner = document.createElement('div');
-        banner.className = 'info-banner';
-        banner.innerHTML = `
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-            <span>Emails are <strong>drafts only</strong> — they are not sent automatically. Copy them and send via your own email client.</span>
-        `;
-        this.resultsGrid.appendChild(banner);
-
-        setTimeout(() => this.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+        this.resultsGrid.appendChild(element('p', 'info-banner',
+            'Source-supported means a quote was found in the retrieved text. It does not independently verify a claim. Drafts are never sent automatically.'));
+        const metrics = data.metrics || {};
+        const cost = metrics.estimated_cost_usd == null ? 'unavailable (configure provider rates)' : '$' + metrics.estimated_cost_usd.toFixed(6);
+        this.metrics.replaceChildren(
+            element('p', '', 'Status: ' + data.status + ' | Duration: ' + (metrics.elapsed_seconds ?? '?') + ' s | Estimated cost: ' + cost),
+            element('p', '', 'Model calls: ' + (metrics.llm_requests ?? 0) + ' | Search calls: ' + (metrics.search_requests ?? 0) +
+                ' | Tokens in/out: ' + (metrics.input_tokens ?? 0) + '/' + (metrics.output_tokens ?? 0)),
+        );
+        const actions = element('div', 'run-actions');
+        const download = element('a', 'btn-reset', 'Export CSV');
+        download.href = '/api/runs/' + encodeURIComponent(data.run_id) + '/export';
+        download.download = 'leadflow.csv';
+        actions.appendChild(download);
+        this.metrics.appendChild(actions);
+        this.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    createLeadCard(lead, index, isQualified) {
-        const s = lead.score;
-        let badgeCls, cardCls;
-        if (s >= 80) { badgeCls = 'score-badge--excellent'; cardCls = 'qualified'; }
-        else if (s >= 60) { badgeCls = 'score-badge--good'; cardCls = 'qualified'; }
-        else if (s >= 40) { badgeCls = 'score-badge--partial'; cardCls = 'partial'; }
-        else { badgeCls = 'score-badge--poor'; cardCls = 'poor'; }
-
-        const hasEmail = lead.email_draft && !lead.email_draft.startsWith('Skipped') && !lead.email_draft.startsWith('Error');
-
-        const card = document.createElement('div');
-        card.className = `lead-card ${cardCls}`;
-        card.style.animationDelay = `${index * 0.08}s`;
-
-        // Clean company name (truncate if too long / has junk)
-        let name = lead.company_name || 'Unknown';
-        if (name.length > 60) name = name.substring(0, 57) + '...';
-
-        // Clean URL for display
-        let displayUrl = lead.website || '';
-        try { displayUrl = new URL(displayUrl).hostname; } catch(_) {}
-
-        card.innerHTML = `
-            <div class="lead-card__main">
-                <div class="score-badge ${badgeCls}">${s}</div>
-                <div class="lead-info">
-                    <h3>${this.esc(name)}</h3>
-                    <a class="lead-info__url" href="${this.esc(lead.website)}" target="_blank" rel="noopener">${this.esc(displayUrl)}</a>
-                    <p class="lead-info__reason">${this.esc(lead.score_reason)}</p>
-                </div>
-            </div>
-            ${hasEmail ? `
-            <div class="email-section">
-                <div class="email-section__header">
-                    <span class="email-section__label">📧 Email Draft</span>
-                    <button class="btn-copy" onclick="navigator.clipboard.writeText(this.closest('.email-section').querySelector('pre').textContent);this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
-                </div>
-                <pre class="email-section__body">${this.esc(lead.email_draft)}</pre>
-            </div>
-            ` : ''}
-        `;
+    createLeadCard(lead) {
+        const card = element('article', 'lead-card ' + (
+            lead.qualification_status === 'qualified' ? 'qualified' :
+            lead.qualification_status === 'needs_review' ? 'partial' : 'poor'));
+        const main = element('div', 'lead-card__main');
+        const score = Number.isInteger(lead.score) && lead.score >= 0 && lead.score <= 100 ? lead.score : '?';
+        const info = element('div', 'lead-info');
+        info.append(element('h3', '', lead.company_name || 'Unknown company'));
+        if (lead.website) info.appendChild(link('Company website', lead.website));
+        if (lead.profile_url) info.appendChild(link('Company profile (website not resolved)', lead.profile_url));
+        info.append(element('p', 'lead-info__reason', lead.score_reason),
+            element('p', 'lead-info__reason', 'Scoring: ' + lead.scoring_status + ' | Draft: ' + lead.email_status));
+        main.append(element('div', 'score-badge score-badge--partial', score), info);
+        card.appendChild(main);
+        const evidence = element('details', 'evidence-panel');
+        evidence.appendChild(element('summary', '', 'Requirements and source evidence'));
+        for (const criterion of lead.criteria || []) {
+            evidence.appendChild(element('p', 'criterion', criterion.requirement + ' - ' + criterion.verdict));
+            for (const citation of criterion.citations || []) {
+                evidence.append(element('blockquote', '', citation.quote),
+                    link(citation.kind + ' - ' + citation.retrieved_at, citation.url));
+            }
+        }
+        for (const field of ['industry', 'location', 'employees', 'funding']) {
+            const fact = (lead.facts || {})[field];
+            evidence.appendChild(element('p', '', field + ': ' + (fact?.value || 'unknown') +
+                (fact?.status === 'source_supported' ? ' (source-supported)' : '')));
+            if (fact?.citation) evidence.appendChild(link('View ' + field + ' source', fact.citation.url));
+        }
+        for (const source of lead.sources || []) {
+            const detail = element('details', 'source-text');
+            detail.append(element('summary', '', source.kind + ' - ' + source.id),
+                link('Source | ' + source.retrieved_at, source.url),
+                element('p', '', source.text));
+            evidence.appendChild(detail);
+        }
+        card.appendChild(evidence);
+        if (lead.email_draft) {
+            const section = element('section', 'email-section');
+            const header = element('div', 'email-section__header');
+            const copy = element('button', 'btn-copy', 'Copy draft');
+            copy.type = 'button';
+            copy.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(lead.email_draft);
+                    copy.textContent = 'Copied';
+                    setTimeout(() => { copy.textContent = 'Copy draft'; }, 1500);
+                } catch { this.appendLog('Copy unavailable. Select and copy the draft text.', 'error'); }
+            });
+            header.append(element('span', 'email-section__label', 'Draft - review before sending'), copy);
+            section.append(header, element('pre', 'email-section__body', lead.email_draft));
+            card.appendChild(section);
+        }
         return card;
     }
 
-    esc(str) {
-        const d = document.createElement('div');
-        d.textContent = str || '';
-        return d.innerHTML;
+    async loadHistory() {
+        try {
+            const response = await fetch('/api/runs');
+            if (!response.ok) throw new Error('Saved runs unavailable. Refresh if your session expired.');
+            const runs = await response.json();
+            this.history.replaceChildren();
+            if (!runs.length) this.history.appendChild(element('p', '', 'Your completed runs will appear here for up to 7 days.'));
+            for (const run of runs) {
+                const row = element('div', 'history-row');
+                const open = element('button', 'btn-copy', new Date(run.created_at).toLocaleString() + ' - ' + run.mode + ' - ' + run.status);
+                open.type = 'button';
+                open.addEventListener('click', async () => {
+                    try {
+                        const response = await fetch('/api/runs/' + run.run_id);
+                        if (!response.ok) throw new Error('This run is no longer available.');
+                        this.showResults(await response.json());
+                    } catch (error) { this.notice.textContent = error.message; }
+                });
+                const remove = element('button', 'btn-copy', 'Delete');
+                remove.type = 'button';
+                remove.addEventListener('click', async () => {
+                    const response = await fetch('/api/runs/' + run.run_id, { method: 'DELETE' });
+                    if (response.ok) await this.loadHistory();
+                    else this.notice.textContent = 'Could not delete this run. Refresh and try again.';
+                });
+                row.append(open, remove);
+                this.history.appendChild(row);
+            }
+        } catch (error) { this.notice.textContent = error.message; }
     }
 
     setLoading(loading) {
         this.btnLaunch.disabled = loading;
+        document.getElementById('try-sample').disabled = loading;
+        document.getElementById('btn-stop').hidden = !loading;
+        this.mode.disabled = loading;
         this.btnText.hidden = loading;
         this.btnIcon.hidden = loading;
         this.btnLoader.hidden = !loading;
@@ -277,10 +327,10 @@ class LeadFlowApp {
     reset() {
         this.pipelineSection.hidden = true;
         this.resultsSection.hidden = true;
-        this.logOutput.innerHTML = '';
+        this.logOutput.replaceChildren();
         this.currentStageIdx = -1;
         this.configSection.scrollIntoView({ behavior: 'smooth' });
     }
 }
-
-document.addEventListener('DOMContentLoaded', () => new LeadFlowApp());
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => new LeadFlowApp());
+if (typeof module !== 'undefined') module.exports = { safeUrl, LeadFlowApp };
